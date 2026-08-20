@@ -2507,6 +2507,20 @@ compaction_suit_allocation_order(struct zone *zone, unsigned int order,
 	return COMPACT_CONTINUE;
 }
 
+struct compaction_stats {
+	u64 t_start_ns;
+	u64 t_find_source_pageblock_ns;
+	u64 t_isolate_ns;
+	u64 t_migrate_ns;
+	u64 t_find_free_targets_ns;
+	u64 t_swap_ptes_ns;
+	u64 t_flush_tlb_ns;
+	u64 t_data_copy_ns;
+};
+/* To check whether a pageblock candidate has been finished
+ * check whether the migrate_pfn is aligned to a pageblock
+ */
+
 static enum compact_result
 compact_zone(struct compact_control *cc, struct capture_control *capc)
 {
@@ -2518,6 +2532,10 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 	bool update_cached;
 	unsigned int nr_succeeded = 0, nr_migratepages;
 	int order;
+
+	struct compaction_stats stats;
+
+	memset(&stats, 0, sizeof(stats));
 
 	/*
 	 * These counters track activities during zone compaction.  Initialize
