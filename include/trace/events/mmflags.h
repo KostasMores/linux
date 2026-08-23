@@ -241,6 +241,12 @@ IF_HAVE_VM_DROPPABLE(VM_DROPPABLE,	"droppable"	)		\
 	) : "none"
 
 #ifdef CONFIG_COMPACTION
+#define COMPACTION_SOURCE					\
+	EM( COMPACT_SOURCE_DIRECT,	"direct")		\
+	EM( COMPACT_SOURCE_KCOMPACTD,	"kcompactd")		\
+	EM( COMPACT_SOURCE_SYSFS,	"sysfs")		\
+	EMe(COMPACT_SOURCE_OTHER,	"other")		\
+
 #define COMPACTION_STATUS					\
 	EM( COMPACT_SKIPPED,		"skipped")		\
 	EM( COMPACT_DEFERRED,		"deferred")		\

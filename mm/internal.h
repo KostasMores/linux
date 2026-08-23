@@ -17,6 +17,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/swap_cgroup.h>
+#include <linux/compaction.h>
 #include <linux/tracepoint-defs.h>
 
 /* Internal core VMA manipulation functions. */
@@ -865,6 +866,17 @@ void memmap_init_range(unsigned long, int, unsigned long, unsigned long,
 /*
  * in mm/compaction.c
  */
+struct compaction_stats {
+	u64 t_start_ns;
+	u64 t_find_source_pageblock_ns;
+	u64 t_isolate_ns;
+	u64 t_migrate_ns;
+	u64 t_find_free_targets_ns;
+	u64 t_swap_ptes_ns;
+	u64 t_flush_tlb_ns;
+	u64 t_data_copy_ns;
+};
+
 /*
  * compact_control is used to track pages being migrated and the free pages
  * they are being migrated to during memory compaction. The free_pfn starts
@@ -910,6 +922,9 @@ struct compact_control {
 					 * ensure forward progress.
 					 */
 	bool alloc_contig;		/* alloc_contig_range allocation */
+
+	enum compact_source source;	/* Calling code path for compaction */
+	struct compaction_stats stats;	/* Contains timing info for compaction */
 };
 
 /*

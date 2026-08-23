@@ -76,6 +76,34 @@ DEFINE_EVENT(mm_compaction_isolate_template, mm_compaction_fast_isolate_freepage
 );
 
 #ifdef CONFIG_COMPACTION
+TRACE_EVENT(mm_compaction_profile,
+
+	TP_PROTO(struct compact_control *cc),
+
+	TP_ARGS(cc),
+
+	TP_STRUCT__entry(
+		__field(int, source)
+		__field(u64, total_time)
+		__field(u64, isolate_time)
+		__field(u64, migrate_time)
+	),
+
+	TP_fast_assign(
+		__entry->source = cc->source;
+		__entry->total_time = ktime_get_ns() - cc->stats.t_start_ns;
+		__entry->isolate_time = cc->stats.t_isolate_ns;
+		__entry->migrate_time = cc->stats.t_migrate_ns;
+	),
+
+	TP_printk("source=%s,total_time=%lluus,isolate_time=%lluus,migrate_time=%luus,other_time=%lluus",
+		__print_symbolic(__entry->source, COMPACTION_SOURCE),
+		__entry->total_time / 1000,
+		__entry->isolate_time / 1000,
+		__entry->migrate_time / 1000 ,
+		(__entry->total_time - __entry->isolate_time - __entry->migrate_time) / 1000)
+);
+
 TRACE_EVENT(mm_compaction_migratepages,
 
 	TP_PROTO(unsigned int nr_migratepages,

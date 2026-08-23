@@ -2,6 +2,13 @@
 #ifndef _LINUX_COMPACTION_H
 #define _LINUX_COMPACTION_H
 
+enum compact_source {
+	COMPACT_SOURCE_DIRECT,
+	COMPACT_SOURCE_KCOMPACTD,
+	COMPACT_SOURCE_SYSFS,
+	COMPACT_SOURCE_OTHER,
+};
+
 /*
  * Determines how hard direct compaction should try to succeed.
  * Lower value means higher priority, analogically to reclaim priority.

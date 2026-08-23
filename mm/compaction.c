@@ -2507,20 +2507,9 @@ compaction_suit_allocation_order(struct zone *zone, unsigned int order,
 	return COMPACT_CONTINUE;
 }
 
-struct compaction_stats {
-	u64 t_start_ns;
-	u64 t_find_source_pageblock_ns;
-	u64 t_isolate_ns;
-	u64 t_migrate_ns;
-	u64 t_find_free_targets_ns;
-	u64 t_swap_ptes_ns;
-	u64 t_flush_tlb_ns;
-	u64 t_data_copy_ns;
-};
 /* To check whether a pageblock candidate has been finished
  * check whether the migrate_pfn is aligned to a pageblock
  */
-
 static enum compact_result
 compact_zone(struct compact_control *cc, struct capture_control *capc)
 {
@@ -2533,9 +2522,8 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 	unsigned int nr_succeeded = 0, nr_migratepages;
 	int order;
 
-	struct compaction_stats stats;
-
-	memset(&stats, 0, sizeof(stats));
+	u64 start_ns;
+	memset(&cc->stats, 0, sizeof(cc->stats));
 
 	/*
 	 * These counters track activities during zone compaction.  Initialize
@@ -2610,6 +2598,8 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 
 	trace_mm_compaction_begin(cc, start_pfn, end_pfn, sync);
 
+	cc->stats.t_start_ns = ktime_get_ns();
+
 	/* lru_add_drain_all could be expensive with involving other CPUs */
 	lru_add_drain();
 
@@ -2632,13 +2622,19 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 		}
 
 rescan:
+		/* Time the latency of isolating pages.
+		 * Aggregation kills individuality, maybe insert separate TP
+		 */
+		start_ns = ktime_get_ns();
 		switch (isolate_migratepages(cc)) {
 		case ISOLATE_ABORT:
+			cc->stats.t_isolate_ns += ktime_get_ns() - start_ns;
 			ret = COMPACT_CONTENDED;
 			putback_movable_pages(&cc->migratepages);
 			cc->nr_migratepages = 0;
 			goto out;
 		case ISOLATE_NONE:
+			cc->stats.t_isolate_ns += ktime_get_ns() - start_ns;
 			if (update_cached) {
 				cc->zone->compact_cached_migrate_pfn[1] =
 					cc->zone->compact_cached_migrate_pfn[0];
@@ -2651,6 +2647,7 @@ rescan:
 			 */
 			goto check_drain;
 		case ISOLATE_SUCCESS:
+			cc->stats.t_isolate_ns += ktime_get_ns() - start_ns;
 			update_cached = false;
 			last_migrated_pfn = max(cc->zone->zone_start_pfn,
 				pageblock_start_pfn(cc->migrate_pfn - 1));
@@ -2662,9 +2659,14 @@ rescan:
 		 * properly.
 		 */
 		nr_migratepages = cc->nr_migratepages;
+
+		/* Time the latency of page migration */
+		start_ns = ktime_get_ns();
 		err = migrate_pages(&cc->migratepages, compaction_alloc,
 				compaction_free, (unsigned long)cc, cc->mode,
 				MR_COMPACTION, &nr_succeeded);
+
+		cc->stats.t_migrate_ns += ktime_get_ns() - start_ns;
 
 		trace_mm_compaction_migratepages(nr_migratepages, nr_succeeded);
 
@@ -2758,6 +2760,7 @@ out:
 	count_compact_events(COMPACTFREE_SCANNED, cc->total_free_scanned);
 
 	trace_mm_compaction_end(cc, start_pfn, end_pfn, sync, ret);
+	trace_mm_compaction_profile(cc);
 
 	VM_BUG_ON(!list_empty(&cc->migratepages));
 
@@ -2782,7 +2785,8 @@ static enum compact_result compact_zone_order(struct zone *zone, int order,
 		.direct_compaction = true,
 		.whole_zone = (prio == MIN_COMPACT_PRIORITY),
 		.ignore_skip_hint = (prio == MIN_COMPACT_PRIORITY),
-		.ignore_block_suitable = (prio == MIN_COMPACT_PRIORITY)
+		.ignore_block_suitable = (prio == MIN_COMPACT_PRIORITY),
+		.source = COMPACT_SOURCE_DIRECT 
 	};
 	struct capture_control capc = {
 		.cc = &cc,
@@ -2919,6 +2923,7 @@ static int compact_node(pg_data_t *pgdat, bool proactive)
 		.whole_zone = true,
 		.gfp_mask = GFP_KERNEL,
 		.proactive_compaction = proactive,
+		.source = proactive ? COMPACT_SOURCE_OTHER : COMPACT_SOURCE_SYSFS
 	};
 
 	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
@@ -3086,6 +3091,7 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 		.ignore_skip_hint = false,
 		.gfp_mask = GFP_KERNEL,
 		.alloc_flags = defrag_mode ? ALLOC_WMARK_HIGH : ALLOC_WMARK_MIN,
+		.source = COMPACT_SOURCE_KCOMPACTD
 	};
 	enum compact_result ret;
 
