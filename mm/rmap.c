@@ -83,6 +83,11 @@
 
 #include "internal.h"
 
+struct try_to_migrate_arg {
+	enum ttu_flags flags;
+	struct migrate_tlb_stats *tlb_stats;
+};
+
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
 
@@ -2299,9 +2304,12 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 	pte_t pteval;
 	struct page *subpage;
 	struct mmu_notifier_range range;
-	enum ttu_flags flags = (enum ttu_flags)(long)arg;
+	struct try_to_migrate_arg *migrate_arg = (struct try_to_migrate_arg *)arg;
+	enum ttu_flags flags = migrate_arg->flags;
+	struct migrate_tlb_stats *tlb_stats = migrate_arg->tlb_stats;
 	unsigned long pfn;
 	unsigned long hsz = 0;
+	u64 start_ns;
 
 	/*
 	 * When racing against e.g. zap_pte_range() on another cpu,
@@ -2451,7 +2459,15 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 
 				set_tlb_ubc_flush_pending(mm, pteval, address, address + PAGE_SIZE);
 			} else {
+				/* TODO: Non-batched TLB-flush, need to measure */
+				if (tlb_stats)
+					start_ns = ktime_get_ns();
+
 				pteval = ptep_clear_flush(vma, address, pvmw.pte);
+
+				if (tlb_stats) {
+					tlb_stats->flush_time_ns += ktime_get_ns() - start_ns;
+				}
 			}
 			if (pte_dirty(pteval))
 				folio_mark_dirty(folio);
@@ -2598,9 +2614,19 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
  */
 void try_to_migrate(struct folio *folio, enum ttu_flags flags)
 {
+	try_to_migrate_prof(folio, flags, NULL);
+}
+
+void try_to_migrate_prof(struct folio *folio, enum ttu_flags flags,
+				struct migrate_tlb_stats *stats)
+{
+	struct try_to_migrate_arg arg = {
+		.flags = flags,
+		.tlb_stats = stats,
+	};
 	struct rmap_walk_control rwc = {
 		.rmap_one = try_to_migrate_one,
-		.arg = (void *)flags,
+		.arg = &arg,
 		.done = folio_not_mapped,
 		.anon_lock = folio_lock_anon_vma_read,
 	};

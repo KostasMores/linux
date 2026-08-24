@@ -1194,7 +1194,7 @@ static void migrate_folio_done(struct folio *src,
 static int migrate_folio_unmap(new_folio_t get_new_folio,
 		free_folio_t put_new_folio, unsigned long private,
 		struct folio *src, struct folio **dstp, enum migrate_mode mode,
-		struct list_head *ret)
+		struct list_head *ret, int reason)
 {
 	struct folio *dst;
 	int rc = -EAGAIN;
@@ -1203,7 +1203,17 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 	bool locked = false;
 	bool dst_locked = false;
 
+	u64 start_ns;
+	struct compact_control *cc = NULL;
+	struct migrate_tlb_stats tlb_stats = {};
+	if (reason == MR_COMPACTION)
+		cc = (struct compact_control *)private;
+
+	start_ns = ktime_get_ns();
 	dst = get_new_folio(src, private);
+	if (cc)
+		cc->stats.t_find_free_targets_ns += ktime_get_ns() - start_ns;
+
 	if (!dst)
 		return -ENOMEM;
 	*dstp = dst;
@@ -1316,7 +1326,16 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 		/* Establish migration ptes */
 		VM_BUG_ON_FOLIO(folio_test_anon(src) &&
 			       !folio_test_ksm(src) && !anon_vma, src);
-		try_to_migrate(src, mode == MIGRATE_ASYNC ? TTU_BATCH_FLUSH : 0);
+		start_ns = ktime_get_ns();
+		try_to_migrate_prof(
+			src,
+			mode == MIGRATE_ASYNC ? TTU_BATCH_FLUSH : 0,
+			cc ? &tlb_stats : NULL
+		);
+		if (cc) {
+			cc->stats.t_swap_ptes_ns += ktime_get_ns() - start_ns - tlb_stats.flush_time_ns;
+			cc->stats.t_flush_tlb_ns += tlb_stats.flush_time_ns;
+		}
 		old_page_state |= PAGE_WAS_MAPPED;
 	}
 
@@ -1351,6 +1370,11 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	struct anon_vma *anon_vma = NULL;
 	struct list_head *prev;
 
+	u64 start_ns;
+	struct compact_control *cc = NULL;
+	if (reason == MR_COMPACTION)
+		cc = (struct compact_control *)private;
+
 	__migrate_folio_extract(dst, &old_page_state, &anon_vma);
 	prev = dst->lru.prev;
 	list_del(&dst->lru);
@@ -1362,7 +1386,10 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 		goto out_unlock_both;
 	}
 
+	start_ns = ktime_get_ns();
 	rc = move_to_new_folio(dst, src, mode);
+	if (cc)
+		cc->stats.t_data_copy_ns += ktime_get_ns() - start_ns;
 	if (rc)
 		goto out;
 
@@ -1379,8 +1406,11 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	if (old_page_state & PAGE_WAS_MLOCKED)
 		lru_add_drain();
 
+	start_ns = ktime_get_ns();
 	if (old_page_state & PAGE_WAS_MAPPED)
 		remove_migration_ptes(src, dst, 0);
+	if (cc)
+		cc->stats.t_swap_ptes_ns += ktime_get_ns() - start_ns;
 
 out_unlock_both:
 	folio_unlock(dst);
@@ -1794,6 +1824,11 @@ static int migrate_pages_batch(struct list_head *from,
 	VM_WARN_ON_ONCE(mode != MIGRATE_ASYNC &&
 			!list_empty(from) && !list_is_singular(from));
 
+	u64 start_ns;
+	struct compact_control *cc = NULL;
+	if (reason == MR_COMPACTION)
+		cc = (struct compact_control *)private;
+
 	for (pass = 0; pass < nr_pass && retry; pass++) {
 		retry = 0;
 		thp_retry = 0;
@@ -1879,8 +1914,13 @@ static int migrate_pages_batch(struct list_head *from,
 				continue;
 			}
 
+			/* Inside this function the latencies for:
+			 *   - finding a free target
+			 *   - unmapping the PTEs with swap entries
+			 *  (- potential unmeasured single TLB flush)
+			 */
 			rc = migrate_folio_unmap(get_new_folio, put_new_folio,
-					private, folio, &dst, mode, ret_folios);
+					private, folio, &dst, mode, ret_folios, reason);
 			/*
 			 * The rules are:
 			 *	0: folio will be put on unmap_folios list,
@@ -1957,7 +1997,10 @@ static int migrate_pages_batch(struct list_head *from,
 	stats->nr_failed_pages += nr_retry_pages;
 move:
 	/* Flush TLBs for all unmapped folios */
+	start_ns = ktime_get_ns();
 	try_to_unmap_flush();
+	if (cc)
+		cc->stats.t_flush_tlb_ns += ktime_get_ns() - start_ns;
 
 	retry = 1;
 	for (pass = 0; pass < nr_pass && retry; pass++) {
@@ -2072,6 +2115,11 @@ int migrate_pages(struct list_head *from, new_folio_t get_new_folio,
 	LIST_HEAD(ret_folios);
 	LIST_HEAD(split_folios);
 	struct migrate_pages_stats stats;
+
+	/* Used for tracing compaction metrics */
+	struct compact_control *cc = NULL;
+	if (reason == MR_COMPACTION)
+		cc = (struct compact_control *)private;
 
 	trace_mm_migrate_pages_start(mode, reason);
 

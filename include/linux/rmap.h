@@ -911,6 +911,12 @@ static inline int folio_try_share_anon_rmap_pmd(struct folio *folio,
 int folio_referenced(struct folio *, int is_locked,
 			struct mem_cgroup *memcg, vm_flags_t *vm_flags);
 
+struct migrate_tlb_stats {
+	u64 flush_time_ns;
+};
+
+void try_to_migrate_prof(struct folio *folio, enum ttu_flags flags,
+				struct migrate_tlb_stats *stats);
 void try_to_migrate(struct folio *folio, enum ttu_flags flags);
 void try_to_unmap(struct folio *, enum ttu_flags flags);
 

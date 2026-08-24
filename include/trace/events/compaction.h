@@ -87,6 +87,10 @@ TRACE_EVENT(mm_compaction_profile,
 		__field(u64, total_time)
 		__field(u64, isolate_time)
 		__field(u64, migrate_time)
+		__field(u64, find_targets_time)
+		__field(u64, swap_ptes_time)
+		__field(u64, flush_tlb_time)
+		__field(u64, data_copy_time)
 	),
 
 	TP_fast_assign(
@@ -94,14 +98,24 @@ TRACE_EVENT(mm_compaction_profile,
 		__entry->total_time = ktime_get_ns() - cc->stats.t_start_ns;
 		__entry->isolate_time = cc->stats.t_isolate_ns;
 		__entry->migrate_time = cc->stats.t_migrate_ns;
+		__entry->find_targets_time = cc->stats.t_find_free_targets_ns;
+		__entry->swap_ptes_time = cc->stats.t_swap_ptes_ns;
+		__entry->flush_tlb_time = cc->stats.t_flush_tlb_ns;
+		__entry->data_copy_time = cc->stats.t_data_copy_ns;
 	),
 
-	TP_printk("source=%s,total_time=%lluus,isolate_time=%lluus,migrate_time=%luus,other_time=%lluus",
+	TP_printk("source=%s,total_time=%lluus,isolate_time=%lluus,migrate_time=%lluus,other_time=%lluus,find_targets_time=%lluus,swap_ptes_time=%lluus,flush_tlb_time=%lluus,data_copy_time=%lluus,migrate_other_time=%lluus",
 		__print_symbolic(__entry->source, COMPACTION_SOURCE),
 		__entry->total_time / 1000,
 		__entry->isolate_time / 1000,
-		__entry->migrate_time / 1000 ,
-		(__entry->total_time - __entry->isolate_time - __entry->migrate_time) / 1000)
+		__entry->migrate_time / 1000,
+		(__entry->total_time - __entry->isolate_time - __entry->migrate_time) / 1000,
+		__entry->find_targets_time / 1000,
+		__entry->swap_ptes_time / 1000,
+		__entry->flush_tlb_time / 1000,
+		__entry->data_copy_time / 1000,
+		(__entry->migrate_time - __entry->find_targets_time - __entry->swap_ptes_time - __entry->flush_tlb_time - __entry->data_copy_time) / 1000
+	)
 );
 
 TRACE_EVENT(mm_compaction_migratepages,
